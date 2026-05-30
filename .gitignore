@@ -1,0 +1,12 @@
+# Downloaded cloud image
+/base/
+
+# Generated VM artifacts
+/ubuntu-vm.qcow2
+/seed.iso
+/console.log
+
+# Legacy artifacts
+/cachyos-vm.qcow2
+/iso/
+*.tmp
