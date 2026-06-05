@@ -104,8 +104,8 @@ QEMU_ARGS=(
     -drive file="$DISK",format=qcow2,if=virtio,cache=writeback
     -drive file="$SEED",format=raw,if=virtio
 
-    # Network: user-mode, SSH forwarded to host port $SSH_PORT
-    -nic user,model=virtio-net-pci,hostfwd=tcp::"$SSH_PORT"-:22
+    # Network: user-mode, SSH + HTTP(S) forwarded to host ports
+    -nic user,model=virtio-net-pci,hostfwd=tcp::"$SSH_PORT"-:22,hostfwd=tcp::8080-:8080,hostfwd=tcp::8443-:8443
 
     # Headless: no graphical display, serial console to a log file
     -display none
