@@ -35,13 +35,24 @@ Subsequent runs reuse the existing image, overlay, and seed, so boot is fast.
 
 ### Connecting
 
-Once cloud-init finishes (~30–60s on first boot):
+Once cloud-init finishes (~30–60s on first boot), use the helper script:
+
+```bash
+./ssh-vm.sh                 # interactive shell
+./ssh-vm.sh -- uptime       # run a command and exit
+```
+
+`ssh-vm.sh` connects as `ubuntu` on the forwarded port and passes any extra
+arguments through to `ssh`. If you have an SSH key it's injected automatically
+and you log in without a password; otherwise you'll be prompted for it
+interactively (default: `ubuntu`). It relaxes host-key checking because the
+guest's host key changes whenever the VM is reset.
+
+Equivalent manual command:
 
 ```bash
 ssh -p 2222 ubuntu@localhost   # password: ubuntu
 ```
-
-If you have an SSH key, it's injected automatically and you can log in without the password.
 
 ## Sharing a host directory
 
@@ -100,10 +111,23 @@ To reset the VM to a clean state, delete `ubuntu-vm.qcow2` (and optionally `seed
 
 ## Stopping the VM
 
-The VM runs in the background. Find and stop it with:
+The VM runs in the background. Stop it with:
 
 ```bash
-pkill -f qemu-system-x86_64
+./stop-vm.sh
 ```
 
-(or shut it down cleanly from inside via `sudo poweroff`).
+`stop-vm.sh` finds the QEMU process bound to *this* VM's overlay disk (so it
+won't touch unrelated QEMU instances), sends it `SIGTERM`, waits up to ~15s for
+a clean exit, then falls back to `SIGKILL`. If the VM isn't running it just says
+so and exits.
+
+You can also shut it down cleanly from inside via `sudo poweroff`.
+
+## Scripts
+
+| Script         | Purpose                                                        |
+| -------------- | ------------------------------------------------------------- |
+| `start-vm.sh`  | Boot the VM (downloads image / builds seed on first run)      |
+| `ssh-vm.sh`    | SSH into the running VM (password prompted if no key)         |
+| `stop-vm.sh`   | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
