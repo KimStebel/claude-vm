@@ -19,8 +19,10 @@ Running Claude Code inside a throwaway VM keeps it isolated from your host: it c
 ## Usage
 
 ```bash
-./start-vm.sh
+./start-vm.sh [HOST_SHARE_DIR]
 ```
+
+The optional `HOST_SHARE_DIR` argument shares a host directory into the guest (see [Sharing a host directory](#sharing-a-host-directory)).
 
 On the **first** run the script will:
 
@@ -40,6 +42,27 @@ ssh -p 2222 ubuntu@localhost   # password: ubuntu
 ```
 
 If you have an SSH key, it's injected automatically and you can log in without the password.
+
+## Sharing a host directory
+
+Pass a host directory as the first argument to share it into the guest over [9p](https://wiki.qemu.org/Documentation/9psetup):
+
+```bash
+./start-vm.sh ~/projects/myapp
+```
+
+It's mounted inside the VM at `~/host` (i.e. `/home/ubuntu/host`):
+
+```bash
+ssh -p 2222 ubuntu@localhost
+ls ~/host        # contents of the shared host directory
+```
+
+Notes:
+
+- The mount is configured with `security_model=none`, so files keep their host UID/GID. Read/write works seamlessly when the host user and the guest `ubuntu` user share the same UID (typically `1000`).
+- The guest mount entry is created once, when the cloud-init seed is built, and uses `nofail` — so the VM still boots normally when started without a share argument.
+- If you generated `seed.iso` before this feature existed, delete it (and re-run) so the mount entry gets added: `rm seed.iso`.
 
 ## Configuration
 

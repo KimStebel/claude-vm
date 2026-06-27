@@ -6,6 +6,18 @@ set -euo pipefail
 
 VM_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Optional host directory to share into the guest via 9p (mounted at ~/host).
+# Usage: ./start-vm.sh [HOST_SHARE_DIR]
+HOST_SHARE_DIR="${1:-}"
+MOUNT_TAG="host"
+if [ -n "$HOST_SHARE_DIR" ]; then
+    if [ ! -d "$HOST_SHARE_DIR" ]; then
+        echo "Error: host share directory does not exist: $HOST_SHARE_DIR" >&2
+        exit 1
+    fi
+    HOST_SHARE_DIR="$(cd "$HOST_SHARE_DIR" && pwd)"   # absolute path
+fi
+
 # Ubuntu cloud image (Resolute = 26.04 LTS)
 UBUNTU_RELEASE="resolute"
 CLOUD_IMG="ubuntu-26.04-server-cloudimg-amd64.img"
@@ -80,6 +92,11 @@ chpasswd:
     - name: $VM_USER
       password: $VM_PASSWORD
       type: text
+
+# 9p share (mount tag "$MOUNT_TAG") -> ~/host. "nofail" so boot succeeds even
+# when no host directory is shared (i.e. the VM is started without an argument).
+mounts:
+  - [ $MOUNT_TAG, /home/$VM_USER/host, 9p, "trans=virtio,version=9p2000.L,msize=104857600,rw,_netdev,nofail", "0", "0" ]
 EOF
 
     xorriso -as genisoimage -output "$SEED" -volid cidata -joliet -rock \
@@ -113,6 +130,13 @@ QEMU_ARGS=(
     -monitor none
 )
 
+# Share a host directory into the guest via 9p (mounted at ~/host) when given.
+if [ -n "$HOST_SHARE_DIR" ]; then
+    QEMU_ARGS+=(
+        -virtfs local,path="$HOST_SHARE_DIR",mount_tag="$MOUNT_TAG",security_model=none
+    )
+fi
+
 echo "Starting Ubuntu Server VM ($CPUS CPUs, $RAM RAM, headless)..."
 nohup "${QEMU_ARGS[@]}" > /dev/null 2>&1 &
 echo "VM started in background (PID: $!)"
@@ -120,3 +144,8 @@ echo
 echo "Console log: $VM_DIR/console.log"
 echo "SSH in once cloud-init finishes (~30-60s on first boot):"
 echo "    ssh -p $SSH_PORT $VM_USER@localhost     # password: $VM_PASSWORD"
+if [ -n "$HOST_SHARE_DIR" ]; then
+    echo
+    echo "Sharing host directory (mounted at ~/host in the guest):"
+    echo "    $HOST_SHARE_DIR"
+fi
