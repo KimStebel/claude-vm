@@ -126,8 +126,9 @@ You can also shut it down cleanly from inside via `sudo poweroff`.
 
 ## Scripts
 
-| Script         | Purpose                                                        |
-| -------------- | ------------------------------------------------------------- |
-| `start-vm.sh`  | Boot the VM (downloads image / builds seed on first run)      |
-| `ssh-vm.sh`    | SSH into the running VM (password prompted if no key)         |
-| `stop-vm.sh`   | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
+| Script          | Purpose                                                       |
+| --------------- | ------------------------------------------------------------- |
+| `start-vm.sh`   | Boot the VM (downloads image / builds seed on first run)      |
+| `ssh-vm.sh`     | SSH into the running VM (password prompted if no key)         |
+| `status-vm.sh`  | Show whether the VM is running, uptime, ports, SSH readiness  |
+| `stop-vm.sh`    | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
