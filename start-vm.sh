@@ -16,6 +16,10 @@ if [ -n "$HOST_SHARE_DIR" ]; then
         exit 1
     fi
     HOST_SHARE_DIR="$(cd "$HOST_SHARE_DIR" && pwd)"   # absolute path
+
+    # Safety check: scan the directory for credentials before exposing it to the
+    # VM (see scan-credentials.sh). A non-zero exit means the user declined.
+    "$VM_DIR/scan-credentials.sh" "$HOST_SHARE_DIR" || exit 1
 fi
 
 # Ubuntu cloud image (Resolute = 26.04 LTS)

@@ -15,6 +15,7 @@ Running Claude Code inside a throwaway VM keeps it isolated from your host: it c
 - `xorriso` (to build the cloud-init seed ISO)
 - OVMF/edk2 UEFI firmware at `/usr/share/edk2/x64/OVMF.4m.fd`
 - `curl` (to download the cloud image)
+- `claude` CLI (optional — used to scan a shared directory for credentials; see [Credential safety scan](#credential-safety-scan))
 
 ## Usage
 
@@ -67,6 +68,27 @@ It's mounted inside the VM at `~/host` (i.e. `/home/ubuntu/host`):
 ```bash
 ssh -p 2222 ubuntu@localhost
 ls ~/host        # contents of the shared host directory
+```
+
+### Credential safety scan
+
+Because the shared directory is mounted **read-write** into a VM you may be
+running untrusted code in, `start-vm.sh` runs a safety check before mounting it.
+The check is delegated to `scan-credentials.sh`, which invokes Claude Code
+locally in non-interactive mode (`claude -p`, with read-only tools) to inspect
+the directory for sensitive material — cloud credentials (GCP/AWS/Azure), SSH/GPG
+private keys, `.env` files with passwords or API tokens, `kubeconfig`, `.pem`
+keys, `.git-credentials`, and similar.
+
+- If anything sensitive is found, it's listed and you're asked whether to mount
+  the directory anyway. Declining aborts the boot.
+- Requires the `claude` CLI on the host; if it's missing you're asked whether to
+  proceed without scanning.
+- Set `SKIP_CREDENTIAL_SCAN=1` to bypass the scan entirely.
+- You can run the scan on its own: `./scan-credentials.sh <dir>`.
+
+```bash
+SKIP_CREDENTIAL_SCAN=1 ./start-vm.sh ~/projects/myapp   # skip the scan
 ```
 
 Notes:
@@ -129,6 +151,7 @@ You can also shut it down cleanly from inside via `sudo poweroff`.
 | Script          | Purpose                                                       |
 | --------------- | ------------------------------------------------------------- |
 | `start-vm.sh`   | Boot the VM (downloads image / builds seed on first run)      |
+| `scan-credentials.sh` | Scan a host dir for credentials before sharing it (uses Claude) |
 | `ssh-vm.sh`     | SSH into the running VM (password prompted if no key)         |
 | `status-vm.sh`  | Show whether the VM is running, uptime, ports, SSH readiness  |
 | `stop-vm.sh`    | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
