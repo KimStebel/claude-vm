@@ -32,6 +32,22 @@ On the **first** run the script will:
 3. Build a cloud-init NoCloud seed (`seed.iso`) that creates the `ubuntu` user, sets a password, and injects your SSH public key (the first `~/.ssh/*.pub` found).
 4. Boot the VM headless (no display), with the serial console written to `console.log`.
 
+Cloud-init also installs and enables a systemd service (`apt-upgrade.service`)
+that refreshes the apt index and upgrades all installed packages on **every**
+boot, ordered after the network is online. The service is enabled once (the
+enable symlink persists on the overlay disk), so every subsequent start upgrades
+packages too.
+
+The outcome of each run is recorded to `/var/log/apt-upgrade.status`, and an
+MOTD hook prints it on **every SSH login**, so a failure can't go unnoticed:
+
+```
+apt-upgrade: last run OK (2026-06-27 12:40:11 UTC)
+apt-upgrade: LAST RUN FAILED (2026-06-27 12:40:11 UTC) -- sudo journalctl -u apt-upgrade.service
+```
+
+For full logs: `journalctl -u apt-upgrade.service` inside the VM.
+
 Subsequent runs reuse the existing image, overlay, and seed, so boot is fast.
 
 ### Connecting

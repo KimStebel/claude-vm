@@ -73,6 +73,61 @@ EOF
 #cloud-config
 hostname: ubuntu-vm
 ssh_pwauth: true
+
+# Refresh the apt index and upgrade all packages on every boot via a systemd
+# service (ordered after the network is online). The wrapper script records the
+# outcome to /var/log/apt-upgrade.status, and an MOTD hook surfaces that result
+# on every SSH login so a failure can't go unnoticed. The service is enabled
+# once via runcmd (below); the enable symlink persists on the overlay disk, so
+# it then runs on every subsequent start.
+write_files:
+  - path: /etc/systemd/system/apt-upgrade.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Update and upgrade apt packages on boot
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/apt-upgrade
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Wrapper that runs the upgrade and records OK/FAILED + a timestamp.
+  - path: /usr/local/sbin/apt-upgrade
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      set -e
+      STATUS=/var/log/apt-upgrade.status
+      record() { printf '%s\t%s\n' "\$1" "\$(date '+%Y-%m-%d %H:%M:%S %Z')" > "\$STATUS"; }
+      trap 'record FAILED' EXIT
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update -o DPkg::Lock::Timeout=300
+      apt-get -y -o DPkg::Lock::Timeout=300 upgrade
+      trap - EXIT
+      record OK
+
+  # MOTD hook: print the last apt-upgrade result on every login.
+  - path: /etc/update-motd.d/99-apt-upgrade
+    permissions: '0755'
+    content: |
+      #!/bin/sh
+      STATUS=/var/log/apt-upgrade.status
+      if systemctl is-active --quiet apt-upgrade.service; then
+        echo "apt-upgrade: running now..."
+      elif [ -r "\$STATUS" ]; then
+        result=\$(cut -f1 "\$STATUS"); when=\$(cut -f2- "\$STATUS")
+        if [ "\$result" = OK ]; then
+          echo "apt-upgrade: last run OK (\$when)"
+        else
+          echo "apt-upgrade: LAST RUN FAILED (\$when) -- sudo journalctl -u apt-upgrade.service"
+        fi
+      fi
+
 users:
   - name: $VM_USER
     sudo: ALL=(ALL) NOPASSWD:ALL
@@ -104,6 +159,13 @@ chpasswd:
 bootcmd:
   - mkdir -p /home/$VM_USER/host
   - [ sh, -c, "mountpoint -q /home/$VM_USER/host || mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,rw $MOUNT_TAG /home/$VM_USER/host || true" ]
+
+# Enable the apt-upgrade service so it runs on every boot (the enable symlink
+# persists across reboots); also kick it off now on this first boot.
+runcmd:
+  - systemctl daemon-reload
+  - systemctl enable apt-upgrade.service
+  - systemctl start --no-block apt-upgrade.service
 EOF
 
     xorriso -as genisoimage -output "$SEED" -volid cidata -joliet -rock \
