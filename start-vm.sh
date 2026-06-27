@@ -93,10 +93,13 @@ chpasswd:
       password: $VM_PASSWORD
       type: text
 
-# 9p share (mount tag "$MOUNT_TAG") -> ~/host. "nofail" so boot succeeds even
-# when no host directory is shared (i.e. the VM is started without an argument).
-mounts:
-  - [ $MOUNT_TAG, /home/$VM_USER/host, 9p, "trans=virtio,version=9p2000.L,msize=104857600,rw,_netdev,nofail", "0", "0" ]
+# Mount the 9p share (tag "$MOUNT_TAG") at ~/host on every boot. Using bootcmd
+# (which runs each boot) rather than the "mounts" module (which only runs once
+# per instance) so it works even on an already-initialized VM. The mount is a
+# no-op when no host directory is shared (started without an argument).
+bootcmd:
+  - mkdir -p /home/$VM_USER/host
+  - [ sh, -c, "mountpoint -q /home/$VM_USER/host || mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,rw $MOUNT_TAG /home/$VM_USER/host || true" ]
 EOF
 
     xorriso -as genisoimage -output "$SEED" -volid cidata -joliet -rock \
