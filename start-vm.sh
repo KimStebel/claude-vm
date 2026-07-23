@@ -30,11 +30,29 @@ CLOUD_IMG_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/releas
 BASE="$VM_DIR/base/$CLOUD_IMG"   # pristine downloaded cloud image (never booted directly)
 DISK="$VM_DIR/ubuntu-vm.qcow2"   # writable overlay backed by $BASE
 SEED="$VM_DIR/seed.iso"          # cloud-init NoCloud seed
-OVMF="/usr/share/edk2/x64/OVMF.4m.fd"
+
+# UEFI firmware (combined code+vars OVMF image). The path varies by distro, so
+# probe the common locations and use the first that exists. Override by setting
+# OVMF in the environment.
+OVMF="${OVMF:-}"
+if [ -z "$OVMF" ]; then
+    for _ovmf in \
+        /usr/share/edk2/x64/OVMF.4m.fd \
+        /usr/share/edk2/ovmf/OVMF.fd \
+        /usr/share/ovmf/OVMF.fd \
+        /usr/share/OVMF/OVMF_CODE_4M.fd \
+        /usr/share/qemu/OVMF.fd; do
+        if [ -f "$_ovmf" ]; then OVMF="$_ovmf"; break; fi
+    done
+fi
+if [ -z "$OVMF" ] || [ ! -f "$OVMF" ]; then
+    echo "Error: could not find OVMF UEFI firmware. Install edk2/ovmf, or set OVMF=/path/to/OVMF.fd" >&2
+    exit 1
+fi
 
 # VM resources
 CPUS=8
-RAM=20G
+RAM=12G
 DISK_SIZE=40G
 
 # Cloud-init login credentials
@@ -59,8 +77,15 @@ if [ ! -f "$DISK" ]; then
 fi
 
 # --- 3. Build the cloud-init seed (once) ------------------------------------
+# The cloud-config lives in cloud-init/user-data.tpl; we substitute the
+# @@PLACEHOLDER@@ markers here to produce the final user-data.
 if [ ! -f "$SEED" ]; then
     echo "Building cloud-init seed: $SEED"
+    TEMPLATE="$VM_DIR/cloud-init/user-data.tpl"
+    if [ ! -f "$TEMPLATE" ]; then
+        echo "Error: cloud-init template not found: $TEMPLATE" >&2
+        exit 1
+    fi
     SEED_DIR="$(mktemp -d)"
     trap 'rm -rf "$SEED_DIR"' EXIT
 
@@ -69,104 +94,21 @@ instance-id: ubuntu-vm
 local-hostname: ubuntu-vm
 EOF
 
-    cat > "$SEED_DIR/user-data" <<EOF
-#cloud-config
-hostname: ubuntu-vm
-ssh_pwauth: true
-
-# Refresh the apt index and upgrade all packages on every boot via a systemd
-# service (ordered after the network is online). The wrapper script records the
-# outcome to /var/log/apt-upgrade.status, and an MOTD hook surfaces that result
-# on every SSH login so a failure can't go unnoticed. The service is enabled
-# once via runcmd (below); the enable symlink persists on the overlay disk, so
-# it then runs on every subsequent start.
-write_files:
-  - path: /etc/systemd/system/apt-upgrade.service
-    permissions: '0644'
-    content: |
-      [Unit]
-      Description=Update and upgrade apt packages on boot
-      Wants=network-online.target
-      After=network-online.target
-
-      [Service]
-      Type=oneshot
-      ExecStart=/usr/local/sbin/apt-upgrade
-
-      [Install]
-      WantedBy=multi-user.target
-
-  # Wrapper that runs the upgrade and records OK/FAILED + a timestamp.
-  - path: /usr/local/sbin/apt-upgrade
-    permissions: '0755'
-    content: |
-      #!/bin/sh
-      set -e
-      STATUS=/var/log/apt-upgrade.status
-      record() { printf '%s\t%s\n' "\$1" "\$(date '+%Y-%m-%d %H:%M:%S %Z')" > "\$STATUS"; }
-      trap 'record FAILED' EXIT
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update -o DPkg::Lock::Timeout=300
-      apt-get -y -o DPkg::Lock::Timeout=300 upgrade
-      trap - EXIT
-      record OK
-
-  # MOTD hook: print the last apt-upgrade result on every login.
-  - path: /etc/update-motd.d/99-apt-upgrade
-    permissions: '0755'
-    content: |
-      #!/bin/sh
-      STATUS=/var/log/apt-upgrade.status
-      if systemctl is-active --quiet apt-upgrade.service; then
-        echo "apt-upgrade: running now..."
-      elif [ -r "\$STATUS" ]; then
-        result=\$(cut -f1 "\$STATUS"); when=\$(cut -f2- "\$STATUS")
-        if [ "\$result" = OK ]; then
-          echo "apt-upgrade: last run OK (\$when)"
-        else
-          echo "apt-upgrade: LAST RUN FAILED (\$when) -- sudo journalctl -u apt-upgrade.service"
-        fi
-      fi
-
-users:
-  - name: $VM_USER
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    shell: /bin/bash
-    lock_passwd: false
-EOF
-
-    # Inject the host's SSH public key if one exists
+    # Inject the host's SSH public key if one exists (quoted for the inline YAML
+    # list in the template; empty -> "ssh_authorized_keys: []", i.e. no key).
     PUBKEY="$(cat ~/.ssh/*.pub 2>/dev/null | head -1 || true)"
+    SSH_KEYS=""
     if [ -n "$PUBKEY" ]; then
-        cat >> "$SEED_DIR/user-data" <<EOF
-    ssh_authorized_keys:
-      - $PUBKEY
-EOF
+        SSH_KEYS="\"$PUBKEY\""
     fi
 
-    cat >> "$SEED_DIR/user-data" <<EOF
-chpasswd:
-  expire: false
-  users:
-    - name: $VM_USER
-      password: $VM_PASSWORD
-      type: text
-
-# Mount the 9p share (tag "$MOUNT_TAG") at ~/host on every boot. Using bootcmd
-# (which runs each boot) rather than the "mounts" module (which only runs once
-# per instance) so it works even on an already-initialized VM. The mount is a
-# no-op when no host directory is shared (started without an argument).
-bootcmd:
-  - mkdir -p /home/$VM_USER/host
-  - [ sh, -c, "mountpoint -q /home/$VM_USER/host || mount -t 9p -o trans=virtio,version=9p2000.L,msize=104857600,rw $MOUNT_TAG /home/$VM_USER/host || true" ]
-
-# Enable the apt-upgrade service so it runs on every boot (the enable symlink
-# persists across reboots); also kick it off now on this first boot.
-runcmd:
-  - systemctl daemon-reload
-  - systemctl enable apt-upgrade.service
-  - systemctl start --no-block apt-upgrade.service
-EOF
+    # Substitute the template placeholders (| delimiter avoids clashing with the
+    # / and + that appear in base64-encoded SSH keys).
+    sed -e "s|@@VM_USER@@|$VM_USER|g" \
+        -e "s|@@VM_PASSWORD@@|$VM_PASSWORD|g" \
+        -e "s|@@MOUNT_TAG@@|$MOUNT_TAG|g" \
+        -e "s|@@SSH_AUTHORIZED_KEYS@@|$SSH_KEYS|g" \
+        "$TEMPLATE" > "$SEED_DIR/user-data"
 
     xorriso -as genisoimage -output "$SEED" -volid cidata -joliet -rock \
         "$SEED_DIR/user-data" "$SEED_DIR/meta-data" >/dev/null 2>&1

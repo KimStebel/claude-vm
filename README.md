@@ -29,8 +29,39 @@ On the **first** run the script will:
 
 1. Download the Ubuntu 26.04 (Resolute) server cloud image into `base/`.
 2. Create a writable qcow2 overlay (`ubuntu-vm.qcow2`) backed by that image.
-3. Build a cloud-init NoCloud seed (`seed.iso`) that creates the `ubuntu` user, sets a password, and injects your SSH public key (the first `~/.ssh/*.pub` found).
+3. Build a cloud-init NoCloud seed (`seed.iso`) from `cloud-init/user-data.tpl` that creates the `ubuntu` user, sets a password, and injects your SSH public key (the first `~/.ssh/*.pub` found).
 4. Boot the VM headless (no display), with the serial console written to `console.log`.
+
+On the first boot, cloud-init also installs a **developer-tooling subset**
+(mirroring the headless parts of Flexys's `laptop-build`, adapted for Ubuntu
+26.04). This is driven by two generated scripts — `/usr/local/sbin/setup-devtools`
+(root: apt repos + packages + standalone binaries) and `setup-devtools-user`
+(per-user tools) — invoked once from `runcmd`:
+
+- **Node.js** (current LTS, system-wide via NodeSource) + global npm CLIs:
+  **Claude Code**, BitWarden CLI (`bw`), `json-diff`
+- **JDK 21**, **sbt**, **Docker CE** (+ buildx/compose; the `ubuntu` user is added
+  to the `docker` group)
+- **google-cloud-cli** (+ GKE auth plugin), **kubectl**, **kubectx**, **helm**
+- Terraform tooling: **tfenv**, **tgswitch**, **hcl2json**
+- **Rust** (via rustup), **nvm** + Node LTS (per-user, for version switching),
+  **bash-it**
+- CLI utilities: `git`, `jq`, `yq`, `fzf`, `ripgrep`, `fd`, `bat`, `micro`,
+  `source-highlight`, `moreutils`, `sshfs`, and more
+
+Because this runs via `runcmd`, it happens only on the **first** boot of an
+instance, and the first boot therefore takes several minutes. Each step is
+guarded, so if something fails (e.g. a transient network error) you can re-run
+it by hand to fill in the gaps:
+
+```bash
+sudo /usr/local/sbin/setup-devtools
+```
+
+The outcome is recorded to `/var/log/devtools-setup.status` and shown on every
+SSH login via an MOTD hook (`devtools-setup: OK (…)` / `WARN (…)`). To re-run the
+whole first-boot setup from scratch, reset the seed (`./delete-vm.sh`, or
+`rm seed.iso`) and start again.
 
 Cloud-init also installs and enables a systemd service (`apt-upgrade.service`)
 that refreshes the apt index and upgrades all installed packages on **every**
@@ -145,7 +176,19 @@ These are created on first run and ignored by git:
 - `seed.iso` — cloud-init NoCloud seed
 - `console.log` — VM serial console output
 
-To reset the VM to a clean state, delete `ubuntu-vm.qcow2` (and optionally `seed.iso`) and run the script again. Deleting `base/` forces a re-download.
+To reset the VM to a clean state, use `./delete-vm.sh` (or delete the artifacts
+by hand) and run `./start-vm.sh` again:
+
+```bash
+./delete-vm.sh          # remove overlay disk, seed, and console log (keeps base image)
+./delete-vm.sh --all    # also remove the downloaded base image (forces re-download)
+```
+
+`delete-vm.sh` refuses to run while the VM is still up (stop it first with
+`./stop-vm.sh`) and prompts before deleting; pass `-y`/`--yes` to skip the
+prompt. Removing `seed.iso` gives a brand-new cloud-init instance on the next
+boot, so first-boot setup (apt upgrade + Node.js/Claude Code install) runs
+again.
 
 ## Stopping the VM
 
@@ -171,3 +214,4 @@ You can also shut it down cleanly from inside via `sudo poweroff`.
 | `ssh-vm.sh`     | SSH into the running VM (password prompted if no key)         |
 | `status-vm.sh`  | Show whether the VM is running, uptime, ports, SSH readiness  |
 | `stop-vm.sh`    | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
+| `delete-vm.sh`  | Delete the VM's artifacts (disk/seed/log) to start over fresh |
