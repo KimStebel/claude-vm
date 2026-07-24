@@ -53,7 +53,7 @@ fi
 # VM resources
 CPUS=8
 RAM=12G
-DISK_SIZE=40G
+DISK_SIZE=80G
 
 # Cloud-init login credentials
 VM_USER="ubuntu"
