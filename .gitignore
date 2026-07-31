@@ -5,6 +5,7 @@
 /ubuntu-vm.qcow2
 /seed.iso
 /console.log
+/qemu.log
 
 # Legacy artifacts
 /cachyos-vm.qcow2

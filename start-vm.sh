@@ -149,10 +149,11 @@ if [ -n "$HOST_SHARE_DIR" ]; then
 fi
 
 echo "Starting Ubuntu Server VM ($CPUS CPUs, $RAM RAM, headless)..."
-nohup "${QEMU_ARGS[@]}" > /dev/null 2>&1 &
+nohup "${QEMU_ARGS[@]}" > "$VM_DIR/qemu.log" 2>&1 &
 echo "VM started in background (PID: $!)"
 echo
 echo "Console log: $VM_DIR/console.log"
+echo "QEMU log:    $VM_DIR/qemu.log    (check here if the VM won't start)"
 echo "SSH in once cloud-init finishes (~30-60s on first boot):"
 echo "    ssh -p $SSH_PORT $VM_USER@localhost     # password: $VM_PASSWORD"
 if [ -n "$HOST_SHARE_DIR" ]; then
