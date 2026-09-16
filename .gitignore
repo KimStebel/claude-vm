@@ -11,3 +11,6 @@
 /cachyos-vm.qcow2
 /iso/
 *.tmp
+
+# Ad-hoc scratch output (may contain client data -- never commit)
+/log
