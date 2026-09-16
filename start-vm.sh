@@ -6,6 +6,61 @@ set -euo pipefail
 
 VM_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Ubuntu cloud image (Resolute = 26.04 LTS)
+UBUNTU_RELEASE="resolute"
+CLOUD_IMG="ubuntu-26.04-server-cloudimg-amd64.img"
+CLOUD_IMG_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/${CLOUD_IMG}"
+
+BASE="$VM_DIR/base/$CLOUD_IMG"   # pristine downloaded cloud image (never booted directly)
+DISK="$VM_DIR/ubuntu-vm.qcow2"   # writable overlay backed by $BASE
+SEED="$VM_DIR/seed.iso"          # cloud-init NoCloud seed
+
+# VM resources
+CPUS=8
+RAM=12G
+DISK_SIZE=80G
+
+# Cloud-init login credentials
+VM_USER="ubuntu"
+VM_PASSWORD="ubuntu"
+
+# SSH port forwarded from host -> guest:22
+SSH_PORT=2222
+
+# Refuse to start a second VM on the same overlay disk. QEMU takes an exclusive
+# write lock on it, so a second instance dies immediately with a "Failed to get
+# write lock" message -- but only in qemu.log, after we have already printed a
+# "VM started" banner. Detect the running VM here instead, before doing any
+# work. Looking for the holder by open file descriptor (rather than by command
+# line) also catches a qemu-img or a differently-named process holding it.
+disk_holder_pid() {
+    local fd pid
+    for fd in /proc/[0-9]*/fd/*; do
+        [ -e "$fd" ] || continue
+        if [ "$(readlink -f "$fd" 2>/dev/null)" = "$DISK" ]; then
+            pid="${fd#/proc/}"
+            echo "${pid%%/*}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+if RUNNING_PID="$(disk_holder_pid)"; then
+    echo "Error: a VM is already using $DISK (PID $RUNNING_PID)." >&2
+    # Report what that VM shares: it is not necessarily what this invocation
+    # asked for, and the running share is what the guest actually sees.
+    RUNNING_SHARE="$(tr '\0' '\n' < "/proc/$RUNNING_PID/cmdline" 2>/dev/null |
+        sed -n 's/^local,path=\([^,]*\),.*/\1/p' | head -1)"
+    if [ -n "$RUNNING_SHARE" ]; then
+        echo "       It shares: $RUNNING_SHARE" >&2
+    else
+        echo "       It shares no host directory." >&2
+    fi
+    echo "Shut it down first (ssh -p $SSH_PORT $VM_USER@localhost sudo poweroff, or kill $RUNNING_PID), then retry." >&2
+    exit 1
+fi
+
 # Optional host directory to share into the guest via 9p (mounted at ~/host).
 # Usage: ./start-vm.sh [HOST_SHARE_DIR]
 HOST_SHARE_DIR="${1:-}"
@@ -21,16 +76,6 @@ if [ -n "$HOST_SHARE_DIR" ]; then
     # VM (see scan-credentials.sh). A non-zero exit means the user declined.
     "$VM_DIR/scan-credentials.sh" "$HOST_SHARE_DIR" || exit 1
 fi
-
-# Ubuntu cloud image (Resolute = 26.04 LTS)
-UBUNTU_RELEASE="resolute"
-CLOUD_IMG="ubuntu-26.04-server-cloudimg-amd64.img"
-CLOUD_IMG_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/${CLOUD_IMG}"
-
-BASE="$VM_DIR/base/$CLOUD_IMG"   # pristine downloaded cloud image (never booted directly)
-DISK="$VM_DIR/ubuntu-vm.qcow2"   # writable overlay backed by $BASE
-SEED="$VM_DIR/seed.iso"          # cloud-init NoCloud seed
-
 # UEFI firmware (combined code+vars OVMF image). The path varies by distro, so
 # probe the common locations and use the first that exists. Override by setting
 # OVMF in the environment.
@@ -50,17 +95,6 @@ if [ -z "$OVMF" ] || [ ! -f "$OVMF" ]; then
     exit 1
 fi
 
-# VM resources
-CPUS=8
-RAM=12G
-DISK_SIZE=80G
-
-# Cloud-init login credentials
-VM_USER="ubuntu"
-VM_PASSWORD="ubuntu"
-
-# SSH port forwarded from host -> guest:22
-SSH_PORT=2222
 
 # --- 1. Download the cloud image (once) -------------------------------------
 if [ ! -f "$BASE" ]; then
