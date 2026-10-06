@@ -254,6 +254,12 @@ EOF
 fi
 
 # --- 4. Boot the VM (headless) ----------------------------------------------
+# HTTP ports 8080-8090 and HTTPS 8443 are forwarded 1:1 from host to guest.
+HOSTFWD="hostfwd=tcp::$SSH_PORT-:22"
+for port in $(seq 8080 8090) 8443; do
+    HOSTFWD+=",hostfwd=tcp::$port-:$port"
+done
+
 QEMU_ARGS=(
     qemu-system-x86_64
     -enable-kvm
@@ -270,7 +276,7 @@ QEMU_ARGS=(
     -drive file="$SEED",format=raw,if=virtio
 
     # Network: user-mode, SSH + HTTP(S) forwarded to host ports
-    -nic user,model=virtio-net-pci,hostfwd=tcp::"$SSH_PORT"-:22,hostfwd=tcp::8080-:8080,hostfwd=tcp::8443-:8443
+    -nic user,model=virtio-net-pci,"$HOSTFWD"
 
     # Headless: no graphical display, serial console to a log file
     -display none

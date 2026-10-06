@@ -176,11 +176,11 @@ Edit the variables near the top of `start-vm.sh`:
 
 User-mode networking forwards the following host ports into the guest:
 
-| Host port | Guest port | Purpose          |
-| --------- | ---------- | ---------------- |
-| `2222`    | `22`       | SSH              |
-| `8080`    | `8080`     | HTTP             |
-| `8443`    | `8443`     | HTTPS            |
+| Host port     | Guest port    | Purpose          |
+| ------------- | ------------- | ---------------- |
+| `2222`        | `22`          | SSH              |
+| `8080`–`8090` | `8080`–`8090` | HTTP             |
+| `8443`        | `8443`        | HTTPS            |
 
 ## Generated artifacts
 

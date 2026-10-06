@@ -33,7 +33,7 @@ if ELAPSED="$(ps -o etime= -p "$PID" 2>/dev/null | tr -d ' ')" && [ -n "$ELAPSED
     echo "  Uptime:  $ELAPSED"
 fi
 
-echo "  Ports:   2222->22 (ssh)  8080->8080 (http)  8443->8443 (https)"
+echo "  Ports:   2222->22 (ssh)  8080-8090->8080-8090 (http)  8443->8443 (https)"
 
 # Is SSH accepting connections yet? (cloud-init takes ~30-60s on first boot.)
 if command -v nc >/dev/null 2>&1; then
