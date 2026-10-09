@@ -20,10 +20,15 @@ Running Claude Code inside a throwaway VM keeps it isolated from your host: it c
 ## Usage
 
 ```bash
-./start-vm.sh [HOST_SHARE_DIR]
+./start-vm.sh [-m|--memory SIZE] [HOST_SHARE_DIR]
 ```
 
-The optional `HOST_SHARE_DIR` argument shares a host directory into the guest (see [Sharing a host directory](#sharing-a-host-directory)).
+- `-m`, `--memory SIZE` sets the guest RAM, e.g. `16` or `8192M` (default `12G`). A bare number is taken as GiB; add an `M` suffix for MiB.
+- The optional `HOST_SHARE_DIR` argument shares a host directory into the guest (see [Sharing a host directory](#sharing-a-host-directory)).
+
+```bash
+./start-vm.sh -m 16G ~/projects/myapp   # 16 GiB RAM, share ~/projects/myapp
+```
 
 On the **first** run the script will:
 
@@ -104,7 +109,7 @@ ssh -p 2222 ubuntu@localhost   # password: ubuntu
 
 ## Sharing a host directory
 
-Pass a host directory as the first argument to share it into the guest over [9p](https://wiki.qemu.org/Documentation/9psetup):
+Pass a host directory as the positional argument to share it into the guest over [9p](https://wiki.qemu.org/Documentation/9psetup):
 
 ```bash
 ./start-vm.sh ~/projects/myapp
@@ -151,8 +156,8 @@ Edit the variables near the top of `start-vm.sh`:
 | Variable                       | Default     | Description                          |
 | ------------------------------ | ----------- | ------------------------------------ |
 | `CPUS`                         | `8`         | vCPUs                                |
-| `RAM`                          | `20G`       | Memory                               |
-| `DISK_SIZE`                    | `40G`       | Overlay disk size                    |
+| `RAM`                          | `12G`       | Memory (override per run with `-m`)  |
+| `DISK_SIZE`                    | `80G`       | Overlay disk size                    |
 | `VM_USER` / `VM_PASSWORD`      | `ubuntu`    | Login credentials                    |
 | `SSH_PORT`                     | `2222`      | Host port forwarded to guest `:22`   |
 | `UBUNTU_RELEASE` / `CLOUD_IMG` | `resolute`  | Ubuntu cloud image to download       |

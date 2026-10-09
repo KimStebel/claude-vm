@@ -15,7 +15,7 @@ BASE="$VM_DIR/base/$CLOUD_IMG"   # pristine downloaded cloud image (never booted
 DISK="$VM_DIR/ubuntu-vm.qcow2"   # writable overlay backed by $BASE
 SEED="$VM_DIR/seed.iso"          # cloud-init NoCloud seed
 
-# VM resources
+# VM resources (RAM can be overridden with -m/--memory)
 CPUS=8
 RAM=12G
 DISK_SIZE=80G
@@ -26,6 +26,56 @@ VM_PASSWORD="ubuntu"
 
 # SSH port forwarded from host -> guest:22
 SSH_PORT=2222
+
+usage() {
+    echo "Usage: $0 [-m|--memory SIZE] [HOST_SHARE_DIR]" >&2
+    echo "  -m, --memory SIZE   guest RAM in GiB unless suffixed, e.g. 16 or 8192M (default: $RAM)" >&2
+}
+
+# Parse options; whatever positional argument remains is the share directory.
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -m|--memory)
+            if [ $# -lt 2 ]; then usage; exit 1; fi
+            RAM="$2"
+            shift 2
+            ;;
+        --memory=*)
+            RAM="${1#--memory=}"
+            shift
+            ;;
+        -h|--help)
+            usage
+            exit 0
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "Error: unknown option: $1" >&2
+            usage
+            exit 1
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+if [ $# -gt 1 ]; then
+    usage
+    exit 1
+fi
+
+# Validate here so a typo fails fast rather than only showing up in qemu.log.
+# QEMU would read a bare number as MiB; treat it as GiB instead (-m 16 = 16G).
+if ! [[ "$RAM" =~ ^[0-9]+[MmGgTt]?$ ]]; then
+    echo "Error: invalid memory size: $RAM (expected e.g. 16, 16G or 8192M)" >&2
+    exit 1
+fi
+if [[ "$RAM" =~ ^[0-9]+$ ]]; then
+    RAM="${RAM}G"
+fi
 
 # Refuse to start a second VM on the same overlay disk. QEMU takes an exclusive
 # write lock on it, so a second instance dies immediately with a "Failed to get
@@ -62,7 +112,7 @@ if RUNNING_PID="$(disk_holder_pid)"; then
 fi
 
 # Optional host directory to share into the guest via 9p (mounted at ~/host).
-# Usage: ./start-vm.sh [HOST_SHARE_DIR]
+# Usage: ./start-vm.sh [-m SIZE] [HOST_SHARE_DIR]
 HOST_SHARE_DIR="${1:-}"
 MOUNT_TAG="host"
 if [ -n "$HOST_SHARE_DIR" ]; then
