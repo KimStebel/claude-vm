@@ -12,8 +12,7 @@ CLOUD_IMG="ubuntu-26.04-server-cloudimg-amd64.img"
 CLOUD_IMG_URL="https://cloud-images.ubuntu.com/releases/${UBUNTU_RELEASE}/release/${CLOUD_IMG}"
 
 BASE="$VM_DIR/base/$CLOUD_IMG"   # pristine downloaded cloud image (never booted directly)
-DISK="$VM_DIR/ubuntu-vm.qcow2"   # writable overlay backed by $BASE
-SEED="$VM_DIR/seed.iso"          # cloud-init NoCloud seed
+INSTANCES_DIR="$VM_DIR/instances" # one subdirectory per instance (disk, seed, logs)
 
 # VM resources (RAM can be overridden with -m/--memory)
 CPUS=8
@@ -28,11 +27,28 @@ VM_PASSWORD="ubuntu"
 SSH_PORT=2222
 
 usage() {
-    echo "Usage: $0 [-m|--memory SIZE] [HOST_SHARE_DIR]" >&2
+    echo "Usage: $0 [-m|--memory SIZE] HOST_SHARE_DIR INSTANCE" >&2
     echo "  -m, --memory SIZE   guest RAM in GiB unless suffixed, e.g. 16 or 8192M (default: $RAM)" >&2
+    echo "  HOST_SHARE_DIR      host directory to share into the guest (mounted at ~/host)" >&2
+    echo "  INSTANCE            name of the VM instance; each instance has its own disk" >&2
 }
 
-# Parse options; whatever positional argument remains is the share directory.
+list_instances() {
+    local d found=0
+    echo "Available instances:" >&2
+    for d in "$INSTANCES_DIR"/*/; do
+        [ -f "$d/disk.qcow2" ] || continue
+        d="${d%/}"
+        echo "    ${d##*/}" >&2
+        found=1
+    done
+    if [ "$found" -eq 0 ]; then
+        echo "    (none yet)" >&2
+    fi
+}
+
+# Parse options; the remaining positional arguments are the share directory
+# and the instance name.
 while [ $# -gt 0 ]; do
     case "$1" in
         -m|--memory)
@@ -62,10 +78,25 @@ while [ $# -gt 0 ]; do
             ;;
     esac
 done
-if [ $# -gt 1 ]; then
+if [ $# -ne 2 ]; then
     usage
+    echo >&2
+    list_instances
     exit 1
 fi
+HOST_SHARE_DIR="$1"
+INSTANCE="$2"
+
+# The name becomes a directory and the guest hostname, so keep it simple.
+if ! [[ "$INSTANCE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+    echo "Error: invalid instance name: $INSTANCE (use letters, digits, '.', '_' and '-')" >&2
+    exit 1
+fi
+INSTANCE_DIR="$INSTANCES_DIR/$INSTANCE"
+DISK="$INSTANCE_DIR/disk.qcow2"     # writable overlay backed by $BASE
+SEED="$INSTANCE_DIR/seed.iso"       # cloud-init NoCloud seed
+CONSOLE_LOG="$INSTANCE_DIR/console.log"
+QEMU_LOG="$INSTANCE_DIR/qemu.log"
 
 # Validate here so a typo fails fast rather than only showing up in qemu.log.
 # QEMU would read a bare number as MiB; treat it as GiB instead (-m 16 = 16G).
@@ -77,27 +108,35 @@ if [[ "$RAM" =~ ^[0-9]+$ ]]; then
     RAM="${RAM}G"
 fi
 
-# Refuse to start a second VM on the same overlay disk. QEMU takes an exclusive
-# write lock on it, so a second instance dies immediately with a "Failed to get
-# write lock" message -- but only in qemu.log, after we have already printed a
-# "VM started" banner. Detect the running VM here instead, before doing any
-# work. Looking for the holder by open file descriptor (rather than by command
-# line) also catches a qemu-img or a differently-named process holding it.
-disk_holder_pid() {
-    local fd pid
+# Refuse to start while any instance is running. All instances forward the
+# same host ports, and QEMU takes an exclusive write lock on the disk, so a
+# second VM would die immediately -- but only in qemu.log, after we have already
+# printed a "VM started" banner. Detect the running VM here instead, before
+# doing any work. Looking for the holder by open file descriptor (rather than
+# by command line) also catches a qemu-img or a differently-named process
+# holding a disk. Prints "PID DISK" for the first holder found.
+disk_holder() {
+    local fd pid target
     for fd in /proc/[0-9]*/fd/*; do
         [ -e "$fd" ] || continue
-        if [ "$(readlink -f "$fd" 2>/dev/null)" = "$DISK" ]; then
-            pid="${fd#/proc/}"
-            echo "${pid%%/*}"
-            return 0
-        fi
+        target="$(readlink -f "$fd" 2>/dev/null)" || continue
+        case "$target" in
+            "$INSTANCES_DIR"/*/disk.qcow2)
+                pid="${fd#/proc/}"
+                echo "${pid%%/*} $target"
+                return 0
+                ;;
+        esac
     done
     return 1
 }
 
-if RUNNING_PID="$(disk_holder_pid)"; then
-    echo "Error: a VM is already using $DISK (PID $RUNNING_PID)." >&2
+if HOLDER="$(disk_holder)"; then
+    RUNNING_PID="${HOLDER%% *}"
+    RUNNING_DISK="${HOLDER#* }"
+    RUNNING_INSTANCE="${RUNNING_DISK%/disk.qcow2}"
+    RUNNING_INSTANCE="${RUNNING_INSTANCE##*/}"
+    echo "Error: instance '$RUNNING_INSTANCE' is already running (PID $RUNNING_PID)." >&2
     # Report what that VM shares: it is not necessarily what this invocation
     # asked for, and the running share is what the guest actually sees.
     RUNNING_SHARE="$(tr '\0' '\n' < "/proc/$RUNNING_PID/cmdline" 2>/dev/null |
@@ -111,21 +150,33 @@ if RUNNING_PID="$(disk_holder_pid)"; then
     exit 1
 fi
 
-# Optional host directory to share into the guest via 9p (mounted at ~/host).
-# Usage: ./start-vm.sh [-m SIZE] [HOST_SHARE_DIR]
-HOST_SHARE_DIR="${1:-}"
+# Host directory to share into the guest via 9p (mounted at ~/host).
 MOUNT_TAG="host"
-if [ -n "$HOST_SHARE_DIR" ]; then
-    if [ ! -d "$HOST_SHARE_DIR" ]; then
-        echo "Error: host share directory does not exist: $HOST_SHARE_DIR" >&2
+if [ ! -d "$HOST_SHARE_DIR" ]; then
+    echo "Error: host share directory does not exist: $HOST_SHARE_DIR" >&2
+    exit 1
+fi
+HOST_SHARE_DIR="$(cd "$HOST_SHARE_DIR" && pwd)"   # absolute path
+
+# A missing instance is created only after the user confirms, so a typo in the
+# name doesn't silently set up a fresh VM. Ask before the credential scan, which
+# can take a while.
+if [ ! -f "$DISK" ]; then
+    if [ ! -t 0 ]; then
+        echo "Error: instance '$INSTANCE' does not exist. Run interactively to create it." >&2
+        list_instances
         exit 1
     fi
-    HOST_SHARE_DIR="$(cd "$HOST_SHARE_DIR" && pwd)"   # absolute path
-
-    # Safety check: scan the directory for credentials before exposing it to the
-    # VM (see scan-credentials.sh). A non-zero exit means the user declined.
-    "$VM_DIR/scan-credentials.sh" "$HOST_SHARE_DIR" || exit 1
+    read -r -p "Instance '$INSTANCE' does not exist. Create it? [y/N] " reply
+    case "$reply" in
+        y|Y|yes|YES) ;;
+        *) echo "Aborted."; exit 1 ;;
+    esac
 fi
+
+# Safety check: scan the directory for credentials before exposing it to the
+# VM (see scan-credentials.sh). A non-zero exit means the user declined.
+"$VM_DIR/scan-credentials.sh" "$HOST_SHARE_DIR" || exit 1
 # UEFI firmware (combined code+vars OVMF image). The path varies by distro, so
 # probe the common locations and use the first that exists. Override by setting
 # OVMF in the environment.
@@ -156,6 +207,7 @@ fi
 
 # --- 2. Create a writable overlay disk (once) -------------------------------
 if [ ! -f "$DISK" ]; then
+    mkdir -p "$INSTANCE_DIR"
     echo "Creating overlay disk ($DISK_SIZE) backed by $CLOUD_IMG"
     qemu-img create -f qcow2 -F qcow2 -b "$BASE" "$DISK" "$DISK_SIZE"
 fi
@@ -174,8 +226,8 @@ if [ ! -f "$SEED" ]; then
     trap 'rm -rf "$SEED_DIR"' EXIT
 
     cat > "$SEED_DIR/meta-data" <<EOF
-instance-id: ubuntu-vm
-local-hostname: ubuntu-vm
+instance-id: $INSTANCE
+local-hostname: $INSTANCE
 EOF
 
     # Inject the host's SSH public key if one exists (quoted for the inline YAML
@@ -188,7 +240,8 @@ EOF
 
     # Substitute the template placeholders (| delimiter avoids clashing with the
     # / and + that appear in base64-encoded SSH keys).
-    sed -e "s|@@VM_USER@@|$VM_USER|g" \
+    sed -e "s|@@HOSTNAME@@|$INSTANCE|g" \
+        -e "s|@@VM_USER@@|$VM_USER|g" \
         -e "s|@@VM_PASSWORD@@|$VM_PASSWORD|g" \
         -e "s|@@MOUNT_TAG@@|$MOUNT_TAG|g" \
         -e "s|@@SSH_AUTHORIZED_KEYS@@|$SSH_KEYS|g" \
@@ -221,27 +274,21 @@ QEMU_ARGS=(
 
     # Headless: no graphical display, serial console to a log file
     -display none
-    -serial file:"$VM_DIR/console.log"
+    -serial file:"$CONSOLE_LOG"
     -monitor none
+
+    # Share a host directory into the guest via 9p (mounted at ~/host)
+    -virtfs local,path="$HOST_SHARE_DIR",mount_tag="$MOUNT_TAG",security_model=none
 )
 
-# Share a host directory into the guest via 9p (mounted at ~/host) when given.
-if [ -n "$HOST_SHARE_DIR" ]; then
-    QEMU_ARGS+=(
-        -virtfs local,path="$HOST_SHARE_DIR",mount_tag="$MOUNT_TAG",security_model=none
-    )
-fi
-
-echo "Starting Ubuntu Server VM ($CPUS CPUs, $RAM RAM, headless)..."
-nohup "${QEMU_ARGS[@]}" > "$VM_DIR/qemu.log" 2>&1 &
+echo "Starting instance '$INSTANCE' ($CPUS CPUs, $RAM RAM, headless)..."
+nohup "${QEMU_ARGS[@]}" > "$QEMU_LOG" 2>&1 &
 echo "VM started in background (PID: $!)"
 echo
-echo "Console log: $VM_DIR/console.log"
-echo "QEMU log:    $VM_DIR/qemu.log    (check here if the VM won't start)"
+echo "Console log: $CONSOLE_LOG"
+echo "QEMU log:    $QEMU_LOG    (check here if the VM won't start)"
 echo "SSH in once cloud-init finishes (~30-60s on first boot):"
 echo "    ssh -p $SSH_PORT $VM_USER@localhost     # password: $VM_PASSWORD"
-if [ -n "$HOST_SHARE_DIR" ]; then
-    echo
-    echo "Sharing host directory (mounted at ~/host in the guest):"
-    echo "    $HOST_SHARE_DIR"
-fi
+echo
+echo "Sharing host directory (mounted at ~/host in the guest):"
+echo "    $HOST_SHARE_DIR"

@@ -1,7 +1,10 @@
 # Downloaded cloud image
 /base/
 
-# Generated VM artifacts
+# Generated VM artifacts (one directory per instance)
+/instances/
+
+# Legacy single-instance artifacts
 /ubuntu-vm.qcow2
 /seed.iso
 /console.log

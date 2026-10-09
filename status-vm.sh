@@ -5,20 +5,27 @@
 set -euo pipefail
 
 VM_DIR="$(cd "$(dirname "$0")" && pwd)"
-DISK="$VM_DIR/ubuntu-vm.qcow2"   # writable overlay this VM boots from
+INSTANCES_DIR="$VM_DIR/instances"   # one subdirectory per instance
 
 # Keep these in sync with start-vm.sh
 SSH_PORT=2222
 
-# Find the qemu-system process for *this* VM (by its overlay disk path).
-PID="$(pgrep -f "qemu-system-x86_64.*$DISK" || true)"
+# Find the qemu-system process booted from one of our instance disks (only one
+# runs at a time).
+PATTERN="qemu-system-x86_64.*$INSTANCES_DIR/[^/]*/disk\.qcow2"
+PID="$(pgrep -f "$PATTERN" | head -1 || true)"
 
 if [ -z "$PID" ]; then
-    echo "VM status: STOPPED (no qemu process for $DISK)"
+    echo "VM status: STOPPED (no qemu process for any instance in $INSTANCES_DIR)"
     exit 0
 fi
 
+INSTANCE="$(pgrep -af "$PATTERN" | grep -o "$INSTANCES_DIR/[^/]*/disk\.qcow2" | head -1)"
+INSTANCE="${INSTANCE%/disk.qcow2}"
+INSTANCE="${INSTANCE##*/}"
+
 echo "VM status: RUNNING"
+echo "  Name:    $INSTANCE"
 echo "  PID:     $PID"
 
 # Process start time and elapsed (uptime), best-effort.

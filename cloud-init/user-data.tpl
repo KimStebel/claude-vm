@@ -2,10 +2,10 @@
 # Cloud-init user-data template for claude-vm.
 #
 # This is a template, not the final user-data: start-vm.sh substitutes the
-# @@PLACEHOLDER@@ markers (VM_USER, VM_PASSWORD, MOUNT_TAG, SSH_AUTHORIZED_KEYS)
-# when it builds seed.iso. Shell variables in the embedded scripts below use
-# plain "$" — they are consumed inside the guest, not here.
-hostname: ubuntu-vm
+# @@PLACEHOLDER@@ markers (HOSTNAME, VM_USER, VM_PASSWORD, MOUNT_TAG,
+# SSH_AUTHORIZED_KEYS) when it builds seed.iso. Shell variables in the embedded
+# scripts below use plain "$" — they are consumed inside the guest, not here.
+hostname: @@HOSTNAME@@
 ssh_pwauth: true
 
 write_files:

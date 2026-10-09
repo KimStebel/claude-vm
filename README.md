@@ -4,6 +4,8 @@ A headless Ubuntu Server virtual machine for running [Claude Code](https://claud
 
 `start-vm.sh` boots an official Ubuntu cloud image under QEMU/KVM, configured automatically via cloud-init. Everything (image download, overlay disk, cloud-init seed) is created on first run, so a single command gets you a clean VM you can SSH into.
 
+You can keep several named **instances**, each with its own disk. Only one runs at a time.
+
 ## Why
 
 Running Claude Code inside a throwaway VM keeps it isolated from your host: it can install packages, run commands, and modify files freely without touching your machine. The overlay-disk design means you can always reset to a pristine state by deleting the generated artifacts.
@@ -20,22 +22,27 @@ Running Claude Code inside a throwaway VM keeps it isolated from your host: it c
 ## Usage
 
 ```bash
-./start-vm.sh [-m|--memory SIZE] [HOST_SHARE_DIR]
+./start-vm.sh [-m|--memory SIZE] HOST_SHARE_DIR INSTANCE
 ```
 
 - `-m`, `--memory SIZE` sets the guest RAM, e.g. `16` or `8192M` (default `12G`). A bare number is taken as GiB; add an `M` suffix for MiB.
-- The optional `HOST_SHARE_DIR` argument shares a host directory into the guest (see [Sharing a host directory](#sharing-a-host-directory)).
+- `HOST_SHARE_DIR` is a host directory shared into the guest (see [Sharing a host directory](#sharing-a-host-directory)).
+- `INSTANCE` names the VM instance to boot (letters, digits, `.`, `_`, `-`). Each instance has its own disk under `instances/<name>/`, and the name is also the guest's hostname.
 
 ```bash
-./start-vm.sh -m 16G ~/projects/myapp   # 16 GiB RAM, share ~/projects/myapp
+./start-vm.sh -m 16G ~/projects/myapp work   # 16 GiB RAM, share ~/projects/myapp, boot instance "work"
 ```
 
-On the **first** run the script will:
+Run without arguments to see the list of existing instances. If the named
+instance doesn't exist yet, you're asked whether to create it (answering no, or
+running without a terminal, aborts).
 
-1. Download the Ubuntu 26.04 (Resolute) server cloud image into `base/`.
-2. Create a writable qcow2 overlay (`ubuntu-vm.qcow2`) backed by that image.
-3. Build a cloud-init NoCloud seed (`seed.iso`) from `cloud-init/user-data.tpl` that creates the `ubuntu` user, sets a password, and injects your SSH public key (the first `~/.ssh/*.pub` found).
-4. Boot the VM headless (no display), with the serial console written to `console.log`.
+When an instance is first created the script will:
+
+1. Download the Ubuntu 26.04 (Resolute) server cloud image into `base/` (once, shared by all instances).
+2. Create a writable qcow2 overlay (`instances/<name>/disk.qcow2`) backed by that image.
+3. Build a cloud-init NoCloud seed (`instances/<name>/seed.iso`) from `cloud-init/user-data.tpl` that creates the `ubuntu` user, sets a password, and injects your SSH public key (the first `~/.ssh/*.pub` found).
+4. Boot the VM headless (no display), with the serial console written to `instances/<name>/console.log`.
 
 On the first boot, cloud-init also installs a **developer-tooling subset**
 (mirroring the headless parts of Flexys's `laptop-build`, adapted for Ubuntu
@@ -65,8 +72,8 @@ sudo /usr/local/sbin/setup-devtools
 
 The outcome is recorded to `/var/log/devtools-setup.status` and shown on every
 SSH login via an MOTD hook (`devtools-setup: OK (…)` / `WARN (…)`). To re-run the
-whole first-boot setup from scratch, reset the seed (`./delete-vm.sh`, or
-`rm seed.iso`) and start again.
+whole first-boot setup from scratch, delete the instance (`./delete-vm.sh <name>`)
+and start it again.
 
 Cloud-init also installs and enables a systemd service (`apt-upgrade.service`)
 that refreshes the apt index and upgrades all installed packages on **every**
@@ -84,7 +91,11 @@ apt-upgrade: LAST RUN FAILED (2026-06-27 12:40:11 UTC) -- sudo journalctl -u apt
 
 For full logs: `journalctl -u apt-upgrade.service` inside the VM.
 
-Subsequent runs reuse the existing image, overlay, and seed, so boot is fast.
+Subsequent runs of the same instance reuse its overlay and seed, so boot is fast.
+
+Only one instance can run at a time (they all forward the same host ports).
+`start-vm.sh` refuses to start while any instance is running and tells you which
+one it is.
 
 ### Connecting
 
@@ -109,10 +120,10 @@ ssh -p 2222 ubuntu@localhost   # password: ubuntu
 
 ## Sharing a host directory
 
-Pass a host directory as the positional argument to share it into the guest over [9p](https://wiki.qemu.org/Documentation/9psetup):
+The first positional argument is a host directory shared into the guest over [9p](https://wiki.qemu.org/Documentation/9psetup):
 
 ```bash
-./start-vm.sh ~/projects/myapp
+./start-vm.sh ~/projects/myapp work
 ```
 
 It's mounted inside the VM at `~/host` (i.e. `/home/ubuntu/host`):
@@ -140,14 +151,13 @@ keys, `.git-credentials`, and similar.
 - You can run the scan on its own: `./scan-credentials.sh <dir>`.
 
 ```bash
-SKIP_CREDENTIAL_SCAN=1 ./start-vm.sh ~/projects/myapp   # skip the scan
+SKIP_CREDENTIAL_SCAN=1 ./start-vm.sh ~/projects/myapp work   # skip the scan
 ```
 
 Notes:
 
 - The mount is configured with `security_model=none`, so files keep their host UID/GID. Read/write works seamlessly when the host user and the guest `ubuntu` user share the same UID (typically `1000`).
-- The guest mount entry is created once, when the cloud-init seed is built, and uses `nofail` — so the VM still boots normally when started without a share argument.
-- If you generated `seed.iso` before this feature existed, delete it (and re-run) so the mount entry gets added: `rm seed.iso`.
+- The guest mount entry is created once, when the cloud-init seed is built, and uses `nofail`.
 
 ## Configuration
 
@@ -176,24 +186,25 @@ User-mode networking forwards the following host ports into the guest:
 
 These are created on first run and ignored by git:
 
-- `base/` — the pristine downloaded cloud image (never booted directly)
-- `ubuntu-vm.qcow2` — writable overlay disk backing the running VM
-- `seed.iso` — cloud-init NoCloud seed
-- `console.log` — VM serial console output
+- `base/` — the pristine downloaded cloud image (never booted directly), shared by all instances
+- `instances/<name>/disk.qcow2` — the instance's writable overlay disk
+- `instances/<name>/seed.iso` — the instance's cloud-init NoCloud seed
+- `instances/<name>/console.log` — VM serial console output
+- `instances/<name>/qemu.log` — QEMU output (check here if the VM won't start)
 
-To reset the VM to a clean state, use `./delete-vm.sh` (or delete the artifacts
-by hand) and run `./start-vm.sh` again:
+To reset an instance to a clean state, delete it with `./delete-vm.sh` (or
+remove `instances/<name>/` by hand) and start it again:
 
 ```bash
-./delete-vm.sh          # remove overlay disk, seed, and console log (keeps base image)
-./delete-vm.sh --all    # also remove the downloaded base image (forces re-download)
+./delete-vm.sh work         # remove instances/work/ (keeps base image)
+./delete-vm.sh --all work   # also remove the downloaded base image (forces re-download)
 ```
 
-`delete-vm.sh` refuses to run while the VM is still up (stop it first with
-`./stop-vm.sh`) and prompts before deleting; pass `-y`/`--yes` to skip the
-prompt. Removing `seed.iso` gives a brand-new cloud-init instance on the next
-boot, so first-boot setup (apt upgrade + Node.js/Claude Code install) runs
-again.
+Run `./delete-vm.sh` without a name to list the instances. It refuses to delete
+an instance that is still running (stop it first with `./stop-vm.sh`) and
+prompts before deleting; pass `-y`/`--yes` to skip the prompt. The next start
+creates a brand-new cloud-init instance, so first-boot setup (apt upgrade +
+Node.js/Claude Code install) runs again.
 
 ## Stopping the VM
 
@@ -203,10 +214,11 @@ The VM runs in the background. Stop it with:
 ./stop-vm.sh
 ```
 
-`stop-vm.sh` finds the QEMU process bound to *this* VM's overlay disk (so it
-won't touch unrelated QEMU instances), sends it `SIGTERM`, waits up to ~15s for
-a clean exit, then falls back to `SIGKILL`. If the VM isn't running it just says
-so and exits.
+`stop-vm.sh` finds the QEMU process booted from one of the `instances/*/disk.qcow2`
+disks (so it won't touch unrelated QEMU instances), sends it `SIGTERM`, waits up
+to ~15s for a clean exit, then falls back to `SIGKILL`. If no instance is
+running it just says so and exits. `status-vm.sh` likewise reports which
+instance is running.
 
 You can also shut it down cleanly from inside via `sudo poweroff`.
 
@@ -214,9 +226,9 @@ You can also shut it down cleanly from inside via `sudo poweroff`.
 
 | Script          | Purpose                                                       |
 | --------------- | ------------------------------------------------------------- |
-| `start-vm.sh`   | Boot the VM (downloads image / builds seed on first run)      |
+| `start-vm.sh`   | Boot an instance (creates its disk / seed on first run)       |
 | `scan-credentials.sh` | Scan a host dir for credentials before sharing it (uses Claude) |
 | `ssh-vm.sh`     | SSH into the running VM (password prompted if no key)         |
-| `status-vm.sh`  | Show whether the VM is running, uptime, ports, SSH readiness  |
+| `status-vm.sh`  | Show which instance is running, uptime, ports, SSH readiness  |
 | `stop-vm.sh`    | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
-| `delete-vm.sh`  | Delete the VM's artifacts (disk/seed/log) to start over fresh |
+| `delete-vm.sh`  | Delete an instance (disk/seed/logs) to start over fresh       |
