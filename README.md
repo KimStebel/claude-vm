@@ -33,9 +33,9 @@ Running Claude Code inside a throwaway VM keeps it isolated from your host: it c
 ./start-vm.sh -m 16G ~/projects/myapp work   # 16 GiB RAM, share ~/projects/myapp, boot instance "work"
 ```
 
-Run without arguments to see the list of existing instances. If the named
-instance doesn't exist yet, you're asked whether to create it (answering no, or
-running without a terminal, aborts).
+Run `./list-vms.sh` (or `./start-vm.sh` without arguments) to see the existing
+instances. If the named instance doesn't exist yet, you're asked whether to
+create it (answering no, or running without a terminal, aborts).
 
 When an instance is first created the script will:
 
@@ -229,6 +229,7 @@ You can also shut it down cleanly from inside via `sudo poweroff`.
 | `start-vm.sh`   | Boot an instance (creates its disk / seed on first run)       |
 | `scan-credentials.sh` | Scan a host dir for credentials before sharing it (uses Claude) |
 | `ssh-vm.sh`     | SSH into the running VM (password prompted if no key)         |
+| `list-vms.sh`   | List instances with disk usage and which one is running       |
 | `status-vm.sh`  | Show which instance is running, uptime, ports, SSH readiness  |
 | `stop-vm.sh`    | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
 | `delete-vm.sh`  | Delete an instance (disk/seed/logs) to start over fresh       |
