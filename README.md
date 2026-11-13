@@ -112,6 +112,16 @@ and you log in without a password; otherwise you'll be prompted for it
 interactively (default: `ubuntu`). It relaxes host-key checking because the
 guest's host key changes whenever the VM is reset.
 
+To jump straight into Claude Code in the shared directory:
+
+```bash
+./claude-vm.sh              # claude --dangerously-skip-permissions in ~/host
+./claude-vm.sh --continue   # extra arguments are passed through to claude
+```
+
+It uses `ssh-vm.sh` with a TTY and sets `HERDR_AGENT=claude` so herdr detects
+the pane as a Claude agent.
+
 Equivalent manual command:
 
 ```bash
@@ -229,6 +239,7 @@ You can also shut it down cleanly from inside via `sudo poweroff`.
 | `start-vm.sh`   | Boot an instance (creates its disk / seed on first run)       |
 | `scan-credentials.sh` | Scan a host dir for credentials before sharing it (uses Claude) |
 | `ssh-vm.sh`     | SSH into the running VM (password prompted if no key)         |
+| `claude-vm.sh`  | Run Claude Code (skip-permissions) in `~/host` inside the VM  |
 | `list-vms.sh`   | List instances with disk usage and which one is running       |
 | `status-vm.sh`  | Show which instance is running, uptime, ports, SSH readiness  |
 | `stop-vm.sh`    | Stop the running VM (graceful SIGTERM, SIGKILL fallback)      |
